@@ -5,6 +5,7 @@ Scrapes Donald Trump's posts from Roll Call Factbase, translates to Hungarian, a
 """
 
 import os
+import sys
 import time
 import re
 from pathlib import Path
@@ -13,6 +14,11 @@ from typing import Optional, List, Dict, Any
 from anthropic import Anthropic
 from discord_webhook import DiscordWebhook, DiscordEmbed
 from playwright.sync_api import sync_playwright
+
+
+def log(message: str):
+    """Print with flush for immediate output in Docker"""
+    print(message, flush=True)
 
 
 # Configuration from environment variables
@@ -53,7 +59,7 @@ class RollCallScraper:
         posts = []
 
         with sync_playwright() as p:
-            print("⏳ Opening headless browser to scrape Roll Call...")
+            log("⏳ Opening headless browser to scrape Roll Call...")
             browser = p.chromium.launch(headless=self.headless)
             context = browser.new_context(
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
@@ -70,24 +76,27 @@ class RollCallScraper:
                     const cards = document.querySelectorAll('div.rounded-xl.border');
 
                     cards.forEach(card => {
+                        // Only process cards that have a Truth Social link
+                        const truthLinkEl = Array.from(card.querySelectorAll('a')).find(a =>
+                            a.innerText.includes('View on Truth Social') && a.href.includes('truthsocial.com')
+                        );
+
+                        if (!truthLinkEl) return; // Skip non-post cards
+
+                        const url = truthLinkEl.href;
                         const contentEl = card.querySelector('div.text-sm.font-medium.whitespace-pre-wrap');
                         const content = contentEl ? contentEl.innerText.trim() : "";
 
-                        const truthLinkEl = Array.from(card.querySelectorAll('a')).find(a => a.innerText.includes('View on Truth Social'));
-                        const url = truthLinkEl ? truthLinkEl.href : "";
-
-                        const timeEl = Array.from(card.querySelectorAll('div')).find(div => div.innerText.includes('@') && div.innerText.includes('ET'));
+                        const timeEl = Array.from(card.querySelectorAll('div')).find(div =>
+                            div.innerText.includes('@') && div.innerText.includes('ET')
+                        );
                         const timestamp_str = timeEl ? timeEl.innerText.trim() : "";
 
-                        let id = "";
-                        if (url) {
-                            const matches = url.match(/posts\\/(\\d+)/);
-                            id = matches ? matches[1] : url;
-                        } else {
-                            id = btoa(content.substring(0, 50) + timestamp_str).replace(/[^a-zA-Z0-9]/g, "");
-                        }
+                        // Extract ID from URL
+                        const matches = url.match(/posts\\/(\\d+)/);
+                        const id = matches ? matches[1] : "";
 
-                        if (content || url) {
+                        if (id && content) {
                             posts.push({
                                 id: id,
                                 url: url,
@@ -101,10 +110,10 @@ class RollCallScraper:
                 }""")
 
                 posts = extracted_data
-                print(f"✓ Found {len(posts)} posts on Roll Call")
+                log(f"✓ Found {len(posts)} posts on Roll Call")
 
             except Exception as e:
-                print(f"✗ Error during scraping: {e}")
+                log(f"✗ Error during scraping: {e}")
             finally:
                 browser.close()
 
@@ -153,13 +162,13 @@ class Translator:
 
             translated_urls = self.extract_urls(translated)
             if set(original_urls) != set(translated_urls):
-                print("⚠ Warning: URL mismatch in translation.")
+                log("⚠ Warning: URL mismatch in translation.")
 
-            print(f"✓ Translated text ({len(text)} -> {len(translated)} chars)")
+            log(f"✓ Translated text ({len(text)} -> {len(translated)} chars)")
             return translated
 
         except Exception as e:
-            print(f"✗ Translation error: {e}")
+            log(f"✗ Translation error: {e}")
             return text
 
 
@@ -214,12 +223,12 @@ class DiscordPoster:
             response = webhook.execute()
 
             if response.status_code in [200, 204]:
-                print("✓ Posted to Discord successfully")
+                log("✓ Posted to Discord successfully")
             else:
-                print(f"✗ Discord post failed with status {response.status_code}")
+                log(f"✗ Discord post failed with status {response.status_code}")
 
         except Exception as e:
-            print(f"✗ Error posting to Discord: {e}")
+            log(f"✗ Error posting to Discord: {e}")
 
 
 class StateManager:
@@ -235,22 +244,22 @@ class StateManager:
         try:
             if self.state_file.exists():
                 last_id = self.state_file.read_text().strip()
-                print(f"✓ Loaded last processed ID: {last_id}")
+                log(f"✓ Loaded last processed ID: {last_id}")
                 return last_id
             else:
-                print("✓ No previous state found, starting fresh")
+                log("✓ No previous state found, starting fresh")
                 return None
         except Exception as e:
-            print(f"✗ Error loading state: {e}")
+            log(f"✗ Error loading state: {e}")
             return None
 
     def save_last_id(self, post_id: str):
         """Save the last processed post ID"""
         try:
             self.state_file.write_text(post_id)
-            print(f"✓ Saved last processed ID: {post_id}")
+            log(f"✓ Saved last processed ID: {post_id}")
         except Exception as e:
-            print(f"✗ Error saving state: {e}")
+            log(f"✗ Error saving state: {e}")
 
 
 def validate_environment():
@@ -263,18 +272,18 @@ def validate_environment():
         missing.append("ANTHROPIC_API_KEY")
 
     if missing:
-        print(f"✗ Missing required environment variables: {', '.join(missing)}")
+        log(f"✗ Missing required environment variables: {', '.join(missing)}")
         return False
 
-    print("✓ Environment variables validated")
+    log("✓ Environment variables validated")
     return True
 
 
 def main():
     """Main execution loop"""
-    print("=" * 60)
-    print("Trump Scraper (Roll Call Aggregator Mode)")
-    print("=" * 60)
+    log("=" * 60)
+    log("Trump Scraper (Roll Call Aggregator Mode)")
+    log("=" * 60)
 
     if not validate_environment():
         return
@@ -286,18 +295,18 @@ def main():
 
     last_id = state_manager.load_last_id()
     if FORCE_REPROCESS:
-        print("⚠ FORCE_REPROCESS enabled: Ignoring saved state for this run!")
+        log("⚠ FORCE_REPROCESS enabled: Ignoring saved state for this run!")
         last_id = None
 
-    print(f"\n✓ Starting monitoring loop (interval: {CHECK_INTERVAL}s)")
-    print("-" * 60)
+    log(f"\n✓ Starting monitoring loop (interval: {CHECK_INTERVAL}s)")
+    log("-" * 60)
 
     try:
         while True:
-            print(f"\n[{time.strftime('%Y-%m-%d %H:%M:%S')}] Checking for new posts on Roll Call...")
+            log(f"\n[{time.strftime('%Y-%m-%d %H:%M:%S')}] Checking for new posts on Roll Call...")
 
             if FORCE_REPROCESS:
-                print("⚠ FORCE_REPROCESS is enabled - ignoring last_id for this check")
+                log("⚠ FORCE_REPROCESS is enabled - ignoring last_id for this check")
                 check_last_id = None
             else:
                 check_last_id = last_id
@@ -320,9 +329,9 @@ def main():
                 new_posts.append(post)
 
             if new_posts:
-                print(f"Found {len(new_posts)} new posts to process.")
+                log(f"Found {len(new_posts)} new posts to process.")
                 for post in new_posts:
-                    print(f"Processing post {post['id']}...")
+                    log(f"Processing post {post['id']}...")
 
                     original_text = translator.clean_text(post.get('content', ""))
                     translated = ""
@@ -336,15 +345,15 @@ def main():
                         state_manager.save_last_id(last_id)
                     time.sleep(2)
             else:
-                print("✓ No new posts found (since last check)")
+                log("✓ No new posts found (since last check)")
 
-            print(f"\n⏳ Waiting {CHECK_INTERVAL} seconds until next check...")
+            log(f"\n⏳ Waiting {CHECK_INTERVAL} seconds until next check...")
             time.sleep(CHECK_INTERVAL)
 
     except KeyboardInterrupt:
-        print("\n\n✓ Shutting down gracefully...")
+        log("\n\n✓ Shutting down gracefully...")
     except Exception as e:
-        print(f"\n✗ Unexpected error: {e}")
+        log(f"\n✗ Unexpected error: {e}")
         raise
 
 
