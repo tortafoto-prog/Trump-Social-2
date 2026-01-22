@@ -234,9 +234,9 @@ class DiscordPoster:
                 description_parts.append("")
                 description_parts.append(f"🔗 **Eredeti bejegyzés:** [Link a Truth Social-hoz]({post_url})")
 
-            # Add extra space before footer
+            # Add separator before footer
             description_parts.append("")
-            description_parts.append("᲼")
+            description_parts.append("---")
 
             if description_parts:
                 embed.set_description("\n".join(description_parts))
