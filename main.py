@@ -74,11 +74,16 @@ class RollCallScraper:
                 log("✓ Page created, navigating to Roll Call...")
 
                 try:
-                    page.goto(ROLLCALL_URL, wait_until="networkidle", timeout=60000)
-                    log("✓ Page loaded, waiting for content...")
-                    page.wait_for_selector("div.rounded-xl.border", timeout=30000)
-                    log("✓ Content selector found, extracting posts...")
-                    time.sleep(2)
+                    # Use domcontentloaded instead of networkidle (faster, more reliable)
+                    page.goto(ROLLCALL_URL, wait_until="domcontentloaded", timeout=90000)
+                    log("✓ DOM loaded, waiting for posts to render...")
+
+                    # Wait for the actual post content to appear
+                    page.wait_for_selector("div.rounded-xl.border", timeout=60000)
+                    log("✓ Post cards found, waiting for content to fully load...")
+
+                    # Wait a bit more for Alpine.js to render content
+                    time.sleep(5)
 
                     extracted_data = page.evaluate("""() => {
                         const posts = [];
