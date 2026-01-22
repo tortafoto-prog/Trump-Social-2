@@ -58,64 +58,77 @@ class RollCallScraper:
         """Scrape the latest posts from Roll Call using Playwright"""
         posts = []
 
-        with sync_playwright() as p:
-            log("⏳ Opening headless browser to scrape Roll Call...")
-            browser = p.chromium.launch(headless=self.headless)
-            context = browser.new_context(
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-            )
-            page = context.new_page()
+        try:
+            with sync_playwright() as p:
+                log("⏳ Opening headless browser to scrape Roll Call...")
+                browser = p.chromium.launch(
+                    headless=self.headless,
+                    args=['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu']
+                )
+                log("✓ Browser launched successfully")
 
-            try:
-                page.goto(ROLLCALL_URL, wait_until="networkidle", timeout=60000)
-                page.wait_for_selector("div.rounded-xl.border", timeout=30000)
-                time.sleep(2)
+                context = browser.new_context(
+                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                )
+                page = context.new_page()
+                log("✓ Page created, navigating to Roll Call...")
 
-                extracted_data = page.evaluate("""() => {
-                    const posts = [];
-                    const cards = document.querySelectorAll('div.rounded-xl.border');
+                try:
+                    page.goto(ROLLCALL_URL, wait_until="networkidle", timeout=60000)
+                    log("✓ Page loaded, waiting for content...")
+                    page.wait_for_selector("div.rounded-xl.border", timeout=30000)
+                    log("✓ Content selector found, extracting posts...")
+                    time.sleep(2)
 
-                    cards.forEach(card => {
-                        // Only process cards that have a Truth Social link
-                        const truthLinkEl = Array.from(card.querySelectorAll('a')).find(a =>
-                            a.innerText.includes('View on Truth Social') && a.href.includes('truthsocial.com')
-                        );
+                    extracted_data = page.evaluate("""() => {
+                        const posts = [];
+                        const cards = document.querySelectorAll('div.rounded-xl.border');
 
-                        if (!truthLinkEl) return; // Skip non-post cards
+                        cards.forEach(card => {
+                            // Only process cards that have a Truth Social link
+                            const truthLinkEl = Array.from(card.querySelectorAll('a')).find(a =>
+                                a.innerText.includes('View on Truth Social') && a.href.includes('truthsocial.com')
+                            );
 
-                        const url = truthLinkEl.href;
-                        const contentEl = card.querySelector('div.text-sm.font-medium.whitespace-pre-wrap');
-                        const content = contentEl ? contentEl.innerText.trim() : "";
+                            if (!truthLinkEl) return; // Skip non-post cards
 
-                        const timeEl = Array.from(card.querySelectorAll('div')).find(div =>
-                            div.innerText.includes('@') && div.innerText.includes('ET')
-                        );
-                        const timestamp_str = timeEl ? timeEl.innerText.trim() : "";
+                            const url = truthLinkEl.href;
+                            const contentEl = card.querySelector('div.text-sm.font-medium.whitespace-pre-wrap');
+                            const content = contentEl ? contentEl.innerText.trim() : "";
 
-                        // Extract ID from URL
-                        const matches = url.match(/posts\\/(\\d+)/);
-                        const id = matches ? matches[1] : "";
+                            const timeEl = Array.from(card.querySelectorAll('div')).find(div =>
+                                div.innerText.includes('@') && div.innerText.includes('ET')
+                            );
+                            const timestamp_str = timeEl ? timeEl.innerText.trim() : "";
 
-                        if (id && content) {
-                            posts.push({
-                                id: id,
-                                url: url,
-                                content: content,
-                                timestamp_str: timestamp_str,
-                                created_at: new Date().toISOString()
-                            });
-                        }
-                    });
-                    return posts;
-                }""")
+                            // Extract ID from URL
+                            const matches = url.match(/posts\\/(\\d+)/);
+                            const id = matches ? matches[1] : "";
 
-                posts = extracted_data
-                log(f"✓ Found {len(posts)} posts on Roll Call")
+                            if (id && content) {
+                                posts.push({
+                                    id: id,
+                                    url: url,
+                                    content: content,
+                                    timestamp_str: timestamp_str,
+                                    created_at: new Date().toISOString()
+                                });
+                            }
+                        });
+                        return posts;
+                    }""")
 
-            except Exception as e:
-                log(f"✗ Error during scraping: {e}")
-            finally:
-                browser.close()
+                    posts = extracted_data
+                    log(f"✓ Found {len(posts)} posts on Roll Call")
+
+                except Exception as e:
+                    log(f"✗ Error during scraping: {e}")
+                finally:
+                    browser.close()
+                    log("✓ Browser closed")
+
+        except Exception as e:
+            log(f"✗ Playwright error: {e}")
 
         return posts
 
