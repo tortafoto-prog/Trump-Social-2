@@ -9,7 +9,7 @@ import sys
 import time
 import re
 from pathlib import Path
-from typing import Optional, List, Dict, Any
+from typing import List, Dict, Any
 
 from anthropic import Anthropic
 from discord_webhook import DiscordWebhook, DiscordEmbed
@@ -27,7 +27,6 @@ ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-20250514")
 CHECK_INTERVAL = int(os.getenv("CHECK_INTERVAL", "300"))
 DATA_DIR = os.getenv("DATA_DIR", "/data")
-FORCE_REPROCESS = os.getenv("FORCE_REPROCESS", "false").lower() == "true"
 
 # Target configuration
 ROLLCALL_URL = "https://rollcall.com/factbase/trump/topic/social/?platform=all&sort=date&sort_order=desc&page=1"
@@ -262,35 +261,34 @@ class DiscordPoster:
             log(f"✗ Error posting to Discord: {e}")
 
 
-class StateManager:
-    """Manages persistent state for tracking processed posts"""
 
-    def __init__(self, data_dir: str):
-        self.data_dir = Path(data_dir)
-        self.data_dir.mkdir(parents=True, exist_ok=True)
-        self.state_file = self.data_dir / "last_id.txt"
 
-    def load_last_id(self) -> Optional[str]:
-        """Load the last processed post ID"""
-        try:
-            if self.state_file.exists():
-                last_id = self.state_file.read_text().strip()
-                log(f"✓ Loaded last processed ID: {last_id}")
-                return last_id
-            else:
-                log("✓ No previous state found, starting fresh")
-                return None
-        except Exception as e:
-            log(f"✗ Error loading state: {e}")
-            return None
+def load_processed_ids(data_dir: str) -> set:
+    """Load processed post IDs from file"""
+    state_file = Path(data_dir) / "processed_ids.txt"
+    try:
+        Path(data_dir).mkdir(parents=True, exist_ok=True)
+        if state_file.exists():
+            ids = set(state_file.read_text().strip().split('\n'))
+            ids.discard('')  # Remove empty strings
+            log(f"✓ Loaded {len(ids)} processed IDs from state")
+            return ids
+    except Exception as e:
+        log(f"⚠ Could not load state: {e}")
+    return set()
 
-    def save_last_id(self, post_id: str):
-        """Save the last processed post ID"""
-        try:
-            self.state_file.write_text(post_id)
-            log(f"✓ Saved last processed ID: {post_id}")
-        except Exception as e:
-            log(f"✗ Error saving state: {e}")
+
+def save_processed_id(data_dir: str, post_id: str, all_ids: set):
+    """Save a processed post ID to file"""
+    state_file = Path(data_dir) / "processed_ids.txt"
+    try:
+        all_ids.add(post_id)
+        # Keep only last 100 IDs to prevent file from growing forever
+        if len(all_ids) > 100:
+            all_ids = set(list(all_ids)[-100:])
+        state_file.write_text('\n'.join(all_ids))
+    except Exception as e:
+        log(f"⚠ Could not save state: {e}")
 
 
 def validate_environment():
@@ -322,12 +320,10 @@ def main():
     scraper = RollCallScraper(headless=True)
     translator = Translator(ANTHROPIC_API_KEY, ANTHROPIC_MODEL)
     discord_poster = DiscordPoster(DISCORD_WEBHOOK_URL)
-    state_manager = StateManager(DATA_DIR)
 
-    last_id = state_manager.load_last_id()
-    if FORCE_REPROCESS:
-        log("⚠ FORCE_REPROCESS enabled: Ignoring saved state for this run!")
-        last_id = None
+    # Load processed IDs from persistent storage
+    processed_ids = load_processed_ids(DATA_DIR)
+    first_run = len(processed_ids) == 0
 
     log(f"\n✓ Starting monitoring loop (interval: {CHECK_INTERVAL}s)")
     log("-" * 60)
@@ -336,34 +332,27 @@ def main():
         while True:
             log(f"\n[{time.strftime('%Y-%m-%d %H:%M:%S')}] Checking for new posts on Roll Call...")
 
-            if FORCE_REPROCESS:
-                log("⚠ FORCE_REPROCESS is enabled - ignoring last_id for this check")
-                check_last_id = None
-            else:
-                check_last_id = last_id
-
             posts = scraper.scrape_latest_posts()
 
-            # Roll Call returns posts in DESC order (newest first)
-            # We want to process them in ASC order (oldest first)
+            # Only look at last 10 posts (newest first from scraper, so take first 10)
+            posts = posts[:10]
+            log(f"Checking last {len(posts)} posts...")
+
+            # Reverse to process oldest first
             posts.reverse()
 
-            # Find new posts (posts after the last processed ID)
-            new_posts = []
-            found_last_id = False if check_last_id else True
-
-            for post in posts:
-                if not found_last_id:
-                    if post['id'] == check_last_id:
-                        found_last_id = True
-                    continue
-                new_posts.append(post)
+            # Find new posts (not yet processed)
+            new_posts = [p for p in posts if p['id'] not in processed_ids]
 
             if new_posts:
-                # Limit to last 5 posts when FORCE_REPROCESS is enabled
-                if FORCE_REPROCESS and len(new_posts) > 5:
-                    new_posts = new_posts[-5:]
-                    log(f"FORCE_REPROCESS: Limited to last 5 posts")
+                # On first run, only process the newest post (to avoid spam)
+                if first_run and len(new_posts) > 1:
+                    # Mark older posts as processed without sending
+                    for post in new_posts[:-1]:
+                        processed_ids.add(post['id'])
+                    new_posts = [new_posts[-1]]
+                    log(f"First run: Only processing newest post")
+                    first_run = False
 
                 log(f"Found {len(new_posts)} new posts to process.")
                 for post in new_posts:
@@ -375,13 +364,11 @@ def main():
                         translated = translator.translate_to_hungarian(original_text)
 
                     discord_poster.post_to_discord(post, translated, original_text)
-
-                    if not FORCE_REPROCESS:
-                        last_id = post['id']
-                        state_manager.save_last_id(last_id)
+                    save_processed_id(DATA_DIR, post['id'], processed_ids)
                     time.sleep(2)
             else:
                 log("✓ No new posts found (since last check)")
+                first_run = False
 
             log(f"\n⏳ Waiting {CHECK_INTERVAL} seconds until next check...")
             time.sleep(CHECK_INTERVAL)
