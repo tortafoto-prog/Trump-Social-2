@@ -283,10 +283,14 @@ def save_processed_id(data_dir: str, post_id: str, all_ids: set):
     state_file = Path(data_dir) / "processed_ids.txt"
     try:
         all_ids.add(post_id)
-        # Keep only last 100 IDs to prevent file from growing forever
-        if len(all_ids) > 100:
-            all_ids = set(list(all_ids)[-100:])
+        # Keep only last 500 IDs to prevent file from growing forever
+        if len(all_ids) > 500:
+            # Convert to sorted list and keep newest (we can't guarantee order, so just trim)
+            ids_to_keep = list(all_ids)[-500:]
+            all_ids.clear()
+            all_ids.update(ids_to_keep)
         state_file.write_text('\n'.join(all_ids))
+        log(f"✓ Saved state: {len(all_ids)} processed IDs")
     except Exception as e:
         log(f"⚠ Could not save state: {e}")
 
@@ -317,6 +321,19 @@ def main():
     if not validate_environment():
         return
 
+    # Check if data directory exists and is writable
+    data_path = Path(DATA_DIR)
+    log(f"Data directory: {DATA_DIR}")
+    try:
+        data_path.mkdir(parents=True, exist_ok=True)
+        test_file = data_path / "test_write.tmp"
+        test_file.write_text("test")
+        test_file.unlink()
+        log(f"✓ Data directory is writable")
+    except Exception as e:
+        log(f"⚠ WARNING: Data directory not writable: {e}")
+        log(f"⚠ State persistence will NOT work - duplicates may occur!")
+
     scraper = RollCallScraper(headless=True)
     translator = Translator(ANTHROPIC_API_KEY, ANTHROPIC_MODEL)
     discord_poster = DiscordPoster(DISCORD_WEBHOOK_URL)
@@ -343,6 +360,11 @@ def main():
 
             # Find new posts (not yet processed)
             new_posts = [p for p in posts if p['id'] not in processed_ids]
+
+            # Debug: show which IDs we're checking
+            post_ids = [p['id'] for p in posts]
+            log(f"Post IDs found: {post_ids}")
+            log(f"Already processed: {len(processed_ids)} IDs")
 
             if new_posts:
                 # On first run, only process the newest post (to avoid spam)
