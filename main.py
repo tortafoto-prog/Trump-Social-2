@@ -263,34 +263,30 @@ class DiscordPoster:
 
 
 
-def load_processed_ids(data_dir: str) -> set:
-    """Load processed post IDs from file"""
+def load_processed_ids(data_dir: str) -> list:
+    """Load processed post IDs from file (ordered list, newest at end)"""
     state_file = Path(data_dir) / "processed_ids.txt"
     try:
         Path(data_dir).mkdir(parents=True, exist_ok=True)
         if state_file.exists():
-            ids = set(state_file.read_text().strip().split('\n'))
-            ids.discard('')  # Remove empty strings
+            ids = [id.strip() for id in state_file.read_text().strip().split('\n') if id.strip()]
             log(f"✓ Loaded {len(ids)} processed IDs from state")
             return ids
     except Exception as e:
         log(f"⚠ Could not load state: {e}")
-    return set()
+    return []
 
 
-def save_processed_id(data_dir: str, post_id: str, all_ids: set):
-    """Save a processed post ID to file"""
+def save_processed_id(data_dir: str, post_id: str, all_ids: list):
+    """Save a processed post ID to file (keeps last 100, oldest removed first)"""
     state_file = Path(data_dir) / "processed_ids.txt"
     try:
-        all_ids.add(post_id)
-        # Keep only last 500 IDs to prevent file from growing forever
-        if len(all_ids) > 500:
-            # Convert to sorted list and keep newest (we can't guarantee order, so just trim)
-            ids_to_keep = list(all_ids)[-500:]
-            all_ids.clear()
-            all_ids.update(ids_to_keep)
+        if post_id not in all_ids:
+            all_ids.append(post_id)
+        # Keep only last 100 IDs - remove oldest (from beginning)
+        while len(all_ids) > 100:
+            all_ids.pop(0)
         state_file.write_text('\n'.join(all_ids))
-        log(f"✓ Saved state: {len(all_ids)} processed IDs")
     except Exception as e:
         log(f"⚠ Could not save state: {e}")
 
@@ -361,17 +357,13 @@ def main():
             # Find new posts (not yet processed)
             new_posts = [p for p in posts if p['id'] not in processed_ids]
 
-            # Debug: show which IDs we're checking
-            post_ids = [p['id'] for p in posts]
-            log(f"Post IDs found: {post_ids}")
-            log(f"Already processed: {len(processed_ids)} IDs")
-
             if new_posts:
                 # On first run, only process the newest post (to avoid spam)
                 if first_run and len(new_posts) > 1:
                     # Mark older posts as processed without sending
                     for post in new_posts[:-1]:
-                        processed_ids.add(post['id'])
+                        if post['id'] not in processed_ids:
+                            processed_ids.append(post['id'])
                     new_posts = [new_posts[-1]]
                     log(f"First run: Only processing newest post")
                     first_run = False
