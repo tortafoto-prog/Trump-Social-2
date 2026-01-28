@@ -383,28 +383,26 @@ def main():
 
             last_id_int = to_int(check_last_id) if check_last_id else None
 
-            for post in posts:
-                post_id_int = to_int(post['id'])
-                
-                if last_id_int and post_id_int:
-                    # Robust Numeric Comparison
-                    if post_id_int > last_id_int:
-                        new_posts.append(post)
-                elif check_last_id:
-                     # Fallback for non-numeric IDs (should be rare for Truth Social)
-                     if str(post['id']) > str(check_last_id):
-                          new_posts.append(post)
-                else:
-                    # No last_id (First run)
-                    # For first run, we usually don't want to spam everything?
-                    # But user said: "Csak a legutolsó posztot keresse meg"
-                    # If this is the VERY first run ever, let's take only the LAST post to initialize
-                    # Or take all?
-                    # Let's take all for now, assuming user wants them. 
-                    # Actually, logic says: "If first run, maybe just take the newest one to init state?"
-                    # But previous logic (in faulty file) did spam 45 posts.
-                    # Let's stick to standard behavior: if no history, fetch all available (up to limit).
-                    new_posts.append(post)
+            if not check_last_id:
+                # First run / No state: Process ONLY the newest post to initialize state
+                # posts list is ASC (oldest -> newest), so posts[-1] is the newest.
+                if posts:
+                    newest_post = posts[-1]
+                    new_posts = [newest_post]
+                    log(f"First run (or no state): Processing only the newest post ({newest_post['id']}) to initialize.")
+            else:
+                # Normal operation: Filter posts newer than last_id
+                for post in posts:
+                    post_id_int = to_int(post['id'])
+                    
+                    if last_id_int and post_id_int:
+                        # Robust Numeric Comparison
+                        if post_id_int > last_id_int:
+                            new_posts.append(post)
+                    elif check_last_id:
+                         # Fallback for non-numeric IDs
+                         if str(post['id']) > str(check_last_id):
+                              new_posts.append(post)
 
             if new_posts:
                 log(f"Found {len(new_posts)} new posts to process.")
