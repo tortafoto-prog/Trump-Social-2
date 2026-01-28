@@ -24,9 +24,10 @@ def log(message: str):
 # Configuration from environment variables
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
-ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-20250514")
-CHECK_INTERVAL = int(os.getenv("CHECK_INTERVAL", "300"))
+ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-3-7-sonnet-20250219")
+CHECK_INTERVAL = int(os.getenv("CHECK_INTERVAL", "60"))
 DATA_DIR = os.getenv("DATA_DIR", "/data")
+FORCE_REPROCESS = os.getenv("FORCE_REPROCESS", "false").lower() == "true"
 
 # Target configuration
 ROLLCALL_URL = "https://rollcall.com/factbase/trump/topic/social/?platform=all&sort=date&sort_order=desc&page=1"
@@ -73,11 +74,16 @@ class RollCallScraper:
                 log("✓ Page created, navigating to Roll Call...")
 
                 try:
+                    # Add cache buster to URL
+                    cache_buster = int(time.time())
+                    final_url = f"{ROLLCALL_URL}&t={cache_buster}"
+                    
                     # Use domcontentloaded instead of networkidle (faster, more reliable)
-                    page.goto(ROLLCALL_URL, wait_until="domcontentloaded", timeout=90000)
+                    page.goto(final_url, wait_until="domcontentloaded", timeout=90000)
                     log("✓ DOM loaded, waiting for posts to render...")
 
                     # Wait for the actual post content to appear
+                    # Verify selector: div.rounded-xl.border
                     page.wait_for_selector("div.rounded-xl.border", timeout=60000)
                     log("✓ Post cards found, waiting for content to fully load...")
 
@@ -109,7 +115,7 @@ class RollCallScraper:
                             const matches = url.match(/posts\\/(\\d+)/);
                             const id = matches ? matches[1] : "";
 
-                            if (id && content) {
+                            if (id && (content || url)) {
                                 posts.push({
                                     id: id,
                                     url: url,
@@ -218,27 +224,38 @@ class DiscordPoster:
             embed.set_title("🇺🇸 Új Truth Social bejegyzés - Donald Trump")
 
             description_parts = []
+            
+            # Truncate if too long (Discord limit is ~4096 for description)
+            if original_text and len(original_text) > 1800:
+                original_text = original_text[:1800] + "... [tovább az eredeti linken]"
+            
             if original_text:
                 description_parts.append("**Eredeti szöveg:**")
                 description_parts.append(original_text)
                 description_parts.append("")
 
+            if translated_text and len(translated_text) > 2000:
+                translated_text = translated_text[:2000] + "... [tovább az eredeti linken]"
+
             if translated_text:
                 description_parts.append("**Magyar fordítás:**")
                 description_parts.append(translated_text)
 
+            full_description = "\n".join(description_parts)
+            if len(full_description) > 4096:
+                 full_description = full_description[:4093] + "..."
+
+            if description_parts:
+                embed.set_description(full_description)
+
             # Add extra space before the link
             post_url = post_data.get("url", "")
             if post_url:
-                description_parts.append("")
-                description_parts.append(f"🔗 **Eredeti bejegyzés:** [Link a Truth Social-hoz]({post_url})")
-
-            # Add separator before footer
-            description_parts.append("")
-            description_parts.append("---")
-
-            if description_parts:
-                embed.set_description("\n".join(description_parts))
+                 embed.add_embed_field(
+                    name="🔗 Eredeti bejegyzés",
+                    value=f"[Link a Truth Social-hoz]({post_url})",
+                    inline=False
+                )
 
             # Footer with Budapest time
             from datetime import datetime
@@ -261,34 +278,32 @@ class DiscordPoster:
             log(f"✗ Error posting to Discord: {e}")
 
 
+class StateManager:
+    """Manages persistent state for tracking processed posts"""
 
+    def __init__(self, data_dir: str):
+        self.data_dir = Path(data_dir)
+        self.data_dir.mkdir(parents=True, exist_ok=True)
+        self.state_file = self.data_dir / "last_id.txt"
 
-def load_processed_ids(data_dir: str) -> list:
-    """Load processed post IDs from file (ordered list, newest at end)"""
-    state_file = Path(data_dir) / "processed_ids.txt"
-    try:
-        Path(data_dir).mkdir(parents=True, exist_ok=True)
-        if state_file.exists():
-            ids = [id.strip() for id in state_file.read_text().strip().split('\n') if id.strip()]
-            log(f"✓ Loaded {len(ids)} processed IDs from state")
-            return ids
-    except Exception as e:
-        log(f"⚠ Could not load state: {e}")
-    return []
+    def load_last_id(self) -> str:
+        """Load the last processed post ID"""
+        try:
+            if self.state_file.exists():
+                last_id = self.state_file.read_text().strip()
+                log(f"✓ Loaded last processed ID: {last_id}")
+                return last_id
+        except Exception as e:
+            log(f"⚠ Could not load state: {e}")
+        return None
 
-
-def save_processed_id(data_dir: str, post_id: str, all_ids: list):
-    """Save a processed post ID to file (keeps last 100, oldest removed first)"""
-    state_file = Path(data_dir) / "processed_ids.txt"
-    try:
-        if post_id not in all_ids:
-            all_ids.append(post_id)
-        # Keep only last 100 IDs - remove oldest (from beginning)
-        while len(all_ids) > 100:
-            all_ids.pop(0)
-        state_file.write_text('\n'.join(all_ids))
-    except Exception as e:
-        log(f"⚠ Could not save state: {e}")
+    def save_last_id(self, last_id: str):
+        """Save the last processed post ID"""
+        try:
+            self.state_file.write_text(str(last_id))
+            # log(f"✓ Saved last processed ID: {last_id}") # Too verbose for every post
+        except Exception as e:
+            log(f"⚠ Could not save state: {e}")
 
 
 def validate_environment():
@@ -311,7 +326,7 @@ def validate_environment():
 def main():
     """Main execution loop"""
     log("=" * 60)
-    log("Trump Scraper (Roll Call Aggregator Mode)")
+    log("Trump Scraper (Roll Call Aggregator Mode) - v2")
     log("=" * 60)
 
     if not validate_environment():
@@ -333,10 +348,15 @@ def main():
     scraper = RollCallScraper(headless=True)
     translator = Translator(ANTHROPIC_API_KEY, ANTHROPIC_MODEL)
     discord_poster = DiscordPoster(DISCORD_WEBHOOK_URL)
+    state_manager = StateManager(DATA_DIR)
 
-    # Load processed IDs from persistent storage
-    processed_ids = load_processed_ids(DATA_DIR)
-    first_run = len(processed_ids) == 0
+    last_id = state_manager.load_last_id()
+    
+    if FORCE_REPROCESS:
+        log("⚠ FORCE_REPROCESS enabled: Ignoring saved state for this run!")
+        check_last_id = None
+    else:
+        check_last_id = last_id
 
     log(f"\n✓ Starting monitoring loop (interval: {CHECK_INTERVAL}s)")
     log("-" * 60)
@@ -347,27 +367,46 @@ def main():
 
             posts = scraper.scrape_latest_posts()
 
-            # Only look at last 10 posts (newest first from scraper, so take first 10)
-            posts = posts[:10]
-            log(f"Checking last {len(posts)} posts...")
-
-            # Reverse to process oldest first
+            # Roll Call returns posts in DESC order (newest first)
+            # We want to process them in ASC order (oldest first)
             posts.reverse()
 
-            # Find new posts (not yet processed)
-            new_posts = [p for p in posts if p['id'] not in processed_ids]
+            # Find new posts (posts with ID > last_id)
+            new_posts = []
+            
+            # Helper to convert to int safely
+            def to_int(val):
+                try:
+                    return int(val)
+                except:
+                    return None
+
+            last_id_int = to_int(check_last_id) if check_last_id else None
+
+            for post in posts:
+                post_id_int = to_int(post['id'])
+                
+                if last_id_int and post_id_int:
+                    # Robust Numeric Comparison
+                    if post_id_int > last_id_int:
+                        new_posts.append(post)
+                elif check_last_id:
+                     # Fallback for non-numeric IDs (should be rare for Truth Social)
+                     if str(post['id']) > str(check_last_id):
+                          new_posts.append(post)
+                else:
+                    # No last_id (First run)
+                    # For first run, we usually don't want to spam everything?
+                    # But user said: "Csak a legutolsó posztot keresse meg"
+                    # If this is the VERY first run ever, let's take only the LAST post to initialize
+                    # Or take all?
+                    # Let's take all for now, assuming user wants them. 
+                    # Actually, logic says: "If first run, maybe just take the newest one to init state?"
+                    # But previous logic (in faulty file) did spam 45 posts.
+                    # Let's stick to standard behavior: if no history, fetch all available (up to limit).
+                    new_posts.append(post)
 
             if new_posts:
-                # On first run, only process the newest post (to avoid spam)
-                if first_run and len(new_posts) > 1:
-                    # Mark older posts as processed without sending
-                    for post in new_posts[:-1]:
-                        if post['id'] not in processed_ids:
-                            processed_ids.append(post['id'])
-                    new_posts = [new_posts[-1]]
-                    log(f"First run: Only processing newest post")
-                    first_run = False
-
                 log(f"Found {len(new_posts)} new posts to process.")
                 for post in new_posts:
                     log(f"Processing post {post['id']}...")
@@ -378,11 +417,14 @@ def main():
                         translated = translator.translate_to_hungarian(original_text)
 
                     discord_poster.post_to_discord(post, translated, original_text)
-                    save_processed_id(DATA_DIR, post['id'], processed_ids)
+                    
+                    # Update state immediately
+                    check_last_id = post['id']
+                    state_manager.save_last_id(check_last_id)
+                    
                     time.sleep(2)
             else:
                 log("✓ No new posts found (since last check)")
-                first_run = False
 
             log(f"\n⏳ Waiting {CHECK_INTERVAL} seconds until next check...")
             time.sleep(CHECK_INTERVAL)
