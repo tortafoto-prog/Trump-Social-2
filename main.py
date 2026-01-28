@@ -248,6 +248,9 @@ class DiscordPoster:
             if description_parts:
                 embed.set_description(full_description)
 
+            # Spacer (Visual separation)
+            embed.add_embed_field(name="\u200b", value="\u200b", inline=False)
+
             # Add extra space before the link
             post_url = post_data.get("url", "")
             if post_url:
@@ -256,6 +259,9 @@ class DiscordPoster:
                     value=f"[Link a Truth Social-hoz]({post_url})",
                     inline=False
                 )
+
+            # Spacer before footer
+            embed.add_embed_field(name="\u200b", value="\u200b", inline=False)
 
             # Footer with original timestamp
             timestamp_str = post_data.get("timestamp_str", "")
