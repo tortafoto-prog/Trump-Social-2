@@ -24,7 +24,7 @@ def log(message: str):
 # Configuration from environment variables
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
-ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-3-7-sonnet-20250219")
+ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-20250514")
 CHECK_INTERVAL = int(os.getenv("CHECK_INTERVAL", "60"))
 DATA_DIR = os.getenv("DATA_DIR", "/data")
 FORCE_REPROCESS = os.getenv("FORCE_REPROCESS", "false").lower() == "true"
