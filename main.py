@@ -57,6 +57,15 @@ class RollCallScraper:
     def scrape_latest_posts(self) -> List[Dict[str, Any]]:
         """Scrape the latest posts from Roll Call using Playwright"""
         posts = []
+        
+        # Set a hard timeout for the scraping operation (Linux/Railway only)
+        # This prevents the script from hanging indefinitely if the browser stucks
+        import signal
+        if hasattr(signal, "alarm"):
+            def handler(signum, frame):
+                raise TimeoutError("Scraping timed out (Hard Limit)")
+            signal.signal(signal.SIGALRM, handler)
+            signal.alarm(180) # 3 minutes hard limit (generous for start)
 
         try:
             with sync_playwright() as p:
@@ -83,13 +92,13 @@ class RollCallScraper:
                     log("✓ DOM loaded, waiting for posts to render...")
 
                     # Wait for the actual post content to appear
-                    # Verify selector: div.rounded-xl.border
                     page.wait_for_selector("div.rounded-xl.border", timeout=60000)
                     log("✓ Post cards found, waiting for content to fully load...")
 
                     # Wait a bit more for Alpine.js to render content
                     time.sleep(5)
-
+                    
+                    log("⏳ Extracting data from page...")
                     extracted_data = page.evaluate("""() => {
                         const posts = [];
                         const cards = document.querySelectorAll('div.rounded-xl.border');
@@ -138,8 +147,12 @@ class RollCallScraper:
                     log("✓ Browser closed")
 
         except Exception as e:
-            log(f"✗ Playwright error: {e}")
+            log(f"✗ Playwright/Timeout error: {e}")
 
+        # Cancel alarm
+        if hasattr(signal, "alarm"):
+            signal.alarm(0)
+            
         return posts
 
 
