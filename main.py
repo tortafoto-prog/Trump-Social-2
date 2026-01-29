@@ -124,12 +124,23 @@ class RollCallScraper:
                             const matches = url.match(/posts\\/(\\d+)/);
                             const id = matches ? matches[1] : "";
 
+                            // Extract Media (Images for ReTruths/Posts)
+                            const imgs = Array.from(card.querySelectorAll('img'));
+                            const mediaUrls = imgs
+                                .filter(img => {
+                                    // Filter out usually small avatars or icons.
+                                    // Assuming content images are larger.
+                                    return img.naturalWidth > 150 || img.naturalHeight > 150;
+                                })
+                                .map(img => img.src);
+
                             if (id && (content || url)) {
                                 posts.push({
                                     id: id,
                                     url: url,
                                     content: content,
                                     timestamp_str: timestamp_str,
+                                    media_urls: mediaUrls,
                                     created_at: new Date().toISOString()
                                 });
                             }
@@ -263,6 +274,12 @@ class DiscordPoster:
 
             # Spacer (Visual separation)
             embed.add_embed_field(name="\u200b", value="\u200b", inline=False)
+
+            # Add Image if available (ReTruths, standard images)
+            media_urls = post_data.get("media_urls", [])
+            if media_urls:
+                # Use the first valid image
+                embed.set_image(url=media_urls[0])
 
             # Add extra space before the link
             post_url = post_data.get("url", "")
