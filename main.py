@@ -155,6 +155,10 @@ class RollCallScraper:
                     log(f"✗ Error during scraping: {e}")
                 finally:
                     try:
+                        # Force a hard timeout for browser close as well, to prevent zombie process hang
+                        if hasattr(signal, "alarm"):
+                             signal.alarm(10) # 10 seconds to close browser
+                        
                         browser.close()
                         log("✓ Browser closed")
                     except Exception as e:
@@ -167,12 +171,7 @@ class RollCallScraper:
         if hasattr(signal, "alarm"):
             signal.alarm(0)
             
-        # Ensure browser is closed
-        if 'browser' in locals():
-            try:
-                browser.close()
-            except Exception as e:
-                log(f"⚠ [Stage 2] Warning: Could not close browser cleanly: {e}")
+
                 
         return posts
 
@@ -497,4 +496,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
