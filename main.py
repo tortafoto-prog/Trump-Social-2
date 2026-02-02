@@ -54,9 +54,10 @@ class RollCallScraper:
     def __init__(self, headless: bool = True):
         self.headless = headless
 
-    def scrape_latest_posts(self) -> List[Dict[str, Any]]:
-        """Scrape the latest posts from Roll Call using Playwright"""
+    def scrape_latest_posts(self, playwright_instance) -> List[Dict[str, Any]]:
+        """Scrape the latest posts from Roll Call using provided Playwright instance"""
         posts = []
+        p = playwright_instance
         
         # Set a hard timeout for the scraping operation (Linux/Railway only)
         # This prevents the script from hanging indefinitely if the browser stucks
@@ -68,12 +69,14 @@ class RollCallScraper:
             signal.alarm(180) # 3 minutes hard limit (generous for start)
 
         try:
-            with sync_playwright() as p:
-                log("⏳ Opening headless browser to scrape Roll Call...")
-                browser = p.chromium.launch(
-                    headless=self.headless,
-                    args=['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu']
-                )
+            # Note: We do NOT use 'with sync_playwright() as p:' here anymore.
+            # We use the persistent instance passed from main()
+            
+            log("⏳ Opening headless browser to scrape Roll Call...")
+            browser = p.chromium.launch(
+                headless=self.headless,
+                args=['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu']
+            )
                 log("✓ Browser launched successfully")
 
                 context = browser.new_context(
@@ -422,70 +425,71 @@ def main():
     log("-" * 60)
 
     try:
-        while True:
-            log(f"\n[{time.strftime('%Y-%m-%d %H:%M:%S')}] Checking for new posts on Roll Call...")
+        with sync_playwright() as p:
+            while True:
+                log(f"\n[{time.strftime('%Y-%m-%d %H:%M:%S')}] Checking for new posts on Roll Call...")
 
-            posts = scraper.scrape_latest_posts()
+                posts = scraper.scrape_latest_posts(p)
 
-            # Roll Call returns posts in DESC order (newest first)
-            # We want to process them in ASC order (oldest first)
-            posts.reverse()
+                # Roll Call returns posts in DESC order (newest first)
+                # We want to process them in ASC order (oldest first)
+                posts.reverse()
 
-            # Find new posts (posts with ID > last_id)
-            new_posts = []
-            
-            # Helper to convert to int safely
-            def to_int(val):
-                try:
-                    return int(val)
-                except:
-                    return None
+                # Find new posts (posts with ID > last_id)
+                new_posts = []
+                
+                # Helper to convert to int safely
+                def to_int(val):
+                    try:
+                        return int(val)
+                    except:
+                        return None
 
-            last_id_int = to_int(check_last_id) if check_last_id else None
+                last_id_int = to_int(check_last_id) if check_last_id else None
 
-            if not check_last_id:
-                # First run / No state: Process ONLY the newest post to initialize state
-                # posts list is ASC (oldest -> newest), so posts[-1] is the newest.
-                if posts:
-                    newest_post = posts[-1]
-                    new_posts = [newest_post]
-                    log(f"First run (or no state): Processing only the newest post ({newest_post['id']}) to initialize.")
-            else:
-                # Normal operation: Filter posts newer than last_id
-                for post in posts:
-                    post_id_int = to_int(post['id'])
-                    
-                    if last_id_int and post_id_int:
-                        # Robust Numeric Comparison
-                        if post_id_int > last_id_int:
-                            new_posts.append(post)
-                    elif check_last_id:
-                         # Fallback for non-numeric IDs
-                         if str(post['id']) > str(check_last_id):
-                              new_posts.append(post)
+                if not check_last_id:
+                    # First run / No state: Process ONLY the newest post to initialize state
+                    # posts list is ASC (oldest -> newest), so posts[-1] is the newest.
+                    if posts:
+                        newest_post = posts[-1]
+                        new_posts = [newest_post]
+                        log(f"First run (or no state): Processing only the newest post ({newest_post['id']}) to initialize.")
+                else:
+                    # Normal operation: Filter posts newer than last_id
+                    for post in posts:
+                        post_id_int = to_int(post['id'])
+                        
+                        if last_id_int and post_id_int:
+                            # Robust Numeric Comparison
+                            if post_id_int > last_id_int:
+                                new_posts.append(post)
+                        elif check_last_id:
+                             # Fallback for non-numeric IDs
+                             if str(post['id']) > str(check_last_id):
+                                  new_posts.append(post)
 
-            if new_posts:
-                log(f"Found {len(new_posts)} new posts to process.")
-                for post in new_posts:
-                    log(f"Processing post {post['id']}...")
+                if new_posts:
+                    log(f"Found {len(new_posts)} new posts to process.")
+                    for post in new_posts:
+                        log(f"Processing post {post['id']}...")
 
-                    original_text = translator.clean_text(post.get('content', ""))
-                    translated = ""
-                    if original_text:
-                        translated = translator.translate_to_hungarian(original_text)
+                        original_text = translator.clean_text(post.get('content', ""))
+                        translated = ""
+                        if original_text:
+                            translated = translator.translate_to_hungarian(original_text)
 
-                    discord_poster.post_to_discord(post, translated, original_text)
-                    
-                    # Update state immediately
-                    check_last_id = post['id']
-                    state_manager.save_last_id(check_last_id)
-                    
-                    time.sleep(2)
-            else:
-                log("✓ No new posts found (since last check)")
+                        discord_poster.post_to_discord(post, translated, original_text)
+                        
+                        # Update state immediately
+                        check_last_id = post['id']
+                        state_manager.save_last_id(check_last_id)
+                        
+                        time.sleep(2)
+                else:
+                    log("✓ No new posts found (since last check)")
 
-            log(f"\n⏳ Waiting {CHECK_INTERVAL} seconds until next check...")
-            time.sleep(CHECK_INTERVAL)
+                log(f"\n⏳ Waiting {CHECK_INTERVAL} seconds until next check...")
+                time.sleep(CHECK_INTERVAL)
 
     except KeyboardInterrupt:
         log("\n\n✓ Shutting down gracefully...")
