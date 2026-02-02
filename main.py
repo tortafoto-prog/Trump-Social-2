@@ -77,95 +77,95 @@ class RollCallScraper:
                 headless=self.headless,
                 args=['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu']
             )
-                log("✓ Browser launched successfully")
+            log("✓ Browser launched successfully")
 
-                context = browser.new_context(
-                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-                )
-                page = context.new_page()
-                log("✓ Page created, navigating to Roll Call...")
+            context = browser.new_context(
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            )
+            page = context.new_page()
+            log("✓ Page created, navigating to Roll Call...")
 
+            try:
+                # Add cache buster to URL
+                cache_buster = int(time.time())
+                final_url = f"{ROLLCALL_URL}&t={cache_buster}"
+                
+                # Use domcontentloaded instead of networkidle (faster, more reliable)
+                page.goto(final_url, wait_until="domcontentloaded", timeout=90000)
+                log("✓ DOM loaded, waiting for posts to render...")
+
+                # Wait for the actual post content to appear
+                page.wait_for_selector("div.rounded-xl.border", timeout=60000)
+                log("✓ Post cards found, waiting for content to fully load...")
+
+                # Wait a bit more for Alpine.js to render content
+                time.sleep(5)
+                
+                log("⏳ Extracting data from page...")
+                extracted_data = page.evaluate("""() => {
+                    const posts = [];
+                    const cards = document.querySelectorAll('div.rounded-xl.border');
+
+                    cards.forEach(card => {
+                        // Only process cards that have a Truth Social link
+                        const truthLinkEl = Array.from(card.querySelectorAll('a')).find(a =>
+                            a.innerText.includes('View on Truth Social') && a.href.includes('truthsocial.com')
+                        );
+
+                        if (!truthLinkEl) return; // Skip non-post cards
+
+                        const url = truthLinkEl.href;
+                        const contentEl = card.querySelector('div.text-sm.font-medium.whitespace-pre-wrap');
+                        const content = contentEl ? contentEl.innerText.trim() : "";
+
+                        const timeEl = Array.from(card.querySelectorAll('div')).find(div =>
+                            div.innerText.includes('@') && div.innerText.includes('ET')
+                        );
+                        const timestamp_str = timeEl ? timeEl.innerText.trim() : "";
+
+                        // Extract ID from URL
+                        const matches = url.match(/posts\\/(\\d+)/);
+                        const id = matches ? matches[1] : "";
+
+                        // Extract Media (Images for ReTruths/Posts)
+                        const imgs = Array.from(card.querySelectorAll('img'));
+                        const mediaUrls = imgs
+                            .filter(img => {
+                                // Filter out usually small avatars or icons.
+                                // Assuming content images are larger.
+                                return img.naturalWidth > 150 || img.naturalHeight > 150;
+                            })
+                            .map(img => img.src);
+
+                        if (id && (content || url)) {
+                            posts.push({
+                                id: id,
+                                url: url,
+                                content: content,
+                                timestamp_str: timestamp_str,
+                                media_urls: mediaUrls,
+                                created_at: new Date().toISOString()
+                            });
+                        }
+                    });
+                    return posts;
+                }""")
+
+                posts = extracted_data
+                log(f"✓ Found {len(posts)} posts on Roll Call")
+
+            except Exception as e:
+                log(f"✗ Error during scraping: {e}")
+            finally:
                 try:
-                    # Add cache buster to URL
-                    cache_buster = int(time.time())
-                    final_url = f"{ROLLCALL_URL}&t={cache_buster}"
+                    # Force a hard timeout for browser close as well, to prevent zombie process hang
+                    if hasattr(signal, "alarm"):
+                         signal.alarm(10) # 10 seconds to close browser
                     
-                    # Use domcontentloaded instead of networkidle (faster, more reliable)
-                    page.goto(final_url, wait_until="domcontentloaded", timeout=90000)
-                    log("✓ DOM loaded, waiting for posts to render...")
-
-                    # Wait for the actual post content to appear
-                    page.wait_for_selector("div.rounded-xl.border", timeout=60000)
-                    log("✓ Post cards found, waiting for content to fully load...")
-
-                    # Wait a bit more for Alpine.js to render content
-                    time.sleep(5)
-                    
-                    log("⏳ Extracting data from page...")
-                    extracted_data = page.evaluate("""() => {
-                        const posts = [];
-                        const cards = document.querySelectorAll('div.rounded-xl.border');
-
-                        cards.forEach(card => {
-                            // Only process cards that have a Truth Social link
-                            const truthLinkEl = Array.from(card.querySelectorAll('a')).find(a =>
-                                a.innerText.includes('View on Truth Social') && a.href.includes('truthsocial.com')
-                            );
-
-                            if (!truthLinkEl) return; // Skip non-post cards
-
-                            const url = truthLinkEl.href;
-                            const contentEl = card.querySelector('div.text-sm.font-medium.whitespace-pre-wrap');
-                            const content = contentEl ? contentEl.innerText.trim() : "";
-
-                            const timeEl = Array.from(card.querySelectorAll('div')).find(div =>
-                                div.innerText.includes('@') && div.innerText.includes('ET')
-                            );
-                            const timestamp_str = timeEl ? timeEl.innerText.trim() : "";
-
-                            // Extract ID from URL
-                            const matches = url.match(/posts\\/(\\d+)/);
-                            const id = matches ? matches[1] : "";
-
-                            // Extract Media (Images for ReTruths/Posts)
-                            const imgs = Array.from(card.querySelectorAll('img'));
-                            const mediaUrls = imgs
-                                .filter(img => {
-                                    // Filter out usually small avatars or icons.
-                                    // Assuming content images are larger.
-                                    return img.naturalWidth > 150 || img.naturalHeight > 150;
-                                })
-                                .map(img => img.src);
-
-                            if (id && (content || url)) {
-                                posts.push({
-                                    id: id,
-                                    url: url,
-                                    content: content,
-                                    timestamp_str: timestamp_str,
-                                    media_urls: mediaUrls,
-                                    created_at: new Date().toISOString()
-                                });
-                            }
-                        });
-                        return posts;
-                    }""")
-
-                    posts = extracted_data
-                    log(f"✓ Found {len(posts)} posts on Roll Call")
-
+                    browser.close()
+                    log("✓ Browser closed")
                 except Exception as e:
-                    log(f"✗ Error during scraping: {e}")
-                finally:
-                    try:
-                        # Force a hard timeout for browser close as well, to prevent zombie process hang
-                        if hasattr(signal, "alarm"):
-                             signal.alarm(10) # 10 seconds to close browser
-                        
-                        browser.close()
-                        log("✓ Browser closed")
-                    except Exception as e:
-                        log(f"⚠ Warning: Could not close browser cleanly: {e}")
+                    log(f"⚠ Warning: Could not close browser cleanly: {e}")
 
         except Exception as e:
             log(f"✗ Playwright/Timeout error: {e}")
