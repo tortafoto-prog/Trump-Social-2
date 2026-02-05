@@ -490,7 +490,16 @@ def main():
 
                 log(f"\n⏳ Waiting {CHECK_INTERVAL} seconds until next check...")
                 time.sleep(CHECK_INTERVAL)
-
+                # PERIODIC RESTART LOGIC
+                # To prevent zombie processes or memory leaks accumulating over 24h+,
+                # we voluntarily exit after a set number of cycles (e.g., 30 cycles * 2 min = 1 hour).
+                # Railway/Docker will automatically restart the container, ensuring a fresh environment.
+                if 'cycle_count' not in locals(): cycle_count = 0
+                cycle_count += 1
+                if cycle_count >= 30:
+                    log("🔄 Periodic Maintenance: Exiting to force container restart (clearing resources)...")
+                    sys.exit(0)
+                    
     except KeyboardInterrupt:
         log("\n\n✓ Shutting down gracefully...")
     except Exception as e:
@@ -500,3 +509,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
