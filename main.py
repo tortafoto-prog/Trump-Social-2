@@ -498,7 +498,7 @@ def main():
                 cycle_count += 1
                 if cycle_count >= 30:
                     log("🔄 Periodic Maintenance: Exiting to force container restart (clearing resources)...")
-                    sys.exit(1)
+                    sys.exit(0)
                     
     except KeyboardInterrupt:
         log("\n\n✓ Shutting down gracefully...")
@@ -509,5 +509,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
