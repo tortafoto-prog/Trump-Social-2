@@ -130,11 +130,7 @@ class RollCallScraper:
                         // Extract Media (Images for ReTruths/Posts)
                         const imgs = Array.from(card.querySelectorAll('img'));
                         const mediaUrls = imgs
-                            .filter(img => {
-                                // Filter out usually small avatars or icons.
-                                // Assuming content images are larger.
-                                return img.naturalWidth > 150 || img.naturalHeight > 150;
-                            })
+                            .filter(img => img.alt === "Media from Donald Trump's post")
                             .map(img => img.src);
 
                         if (id && (content || url)) {
@@ -509,6 +505,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
